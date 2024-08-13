@@ -1,88 +1,98 @@
-import math   # Usado para funções matemáticas como sqrt e log.
-import numpy as np  # Necessário para manipulação de arrays e solução de sistemas mod 2.
+import math
+import numpy as np
+from sympy.ntheory import primerange
+from scipy.linalg import null_space
 
-
-# Função para gerar os primeiros primos de maneira eficiente
 def generate_primes(limit):
-    sieve = [True] * (limit + 1)
-    sieve[0] = sieve[1] = False
-    for start in range(2, int(limit**0.5) + 1):
-        if sieve[start]:
-            for i in range(start * start, limit + 1, start):
-                sieve[i] = False
-    return [num for num, is_prime in enumerate(sieve) if is_prime]
+    """Gera uma lista de primos até o limite fornecido"""
+    return list(primerange(2, limit))
 
-def legendre_symbol(a, p):
-    return pow(a, (p - 1) // 2, p)
+def is_perfect_square(N):
+    """Verifica se N é um quadrado perfeito"""
+    root = int(math.isqrt(N))
+    return root * root == N
 
-# Algoritmo de Tonelli-Shank para resolver congruencias x2=y2 mod p
-def tonelli_shanks(n, p):
-    assert legendre_symbol(n, p) == 1, "n não é um resíduo quadrático módulo p"
-    q = p - 1
-    s = 0
-    while q % 2 == 0:
-        q //= 2
-        s += 1
-    if s == 1:
-        return pow(n, (p + 1) // 4, p)
-    
-    z = 2
-    while legendre_symbol(z, p) != -1:
-        z += 1
-    
-    m = s
-    c = pow(z, q, p)
-    t = pow(n, q, p)
-    r = pow(n, (q + 1) // 2, p)
-    
-    while t != 0 and t != 1:
-        t2i = t
-        i = 0
-        for i in range(1, m):
-            t2i = pow(t2i, 2, p)
-            if t2i == 1:
-                break
-        b = pow(c, 1 << (m - i - 1), p)
-        m = i
-        c = pow(b, 2, p)
-        t = (t * c) % p
-        r = (r * b) % p
-    return r
-
-# Crivo quadratico para fatorar primos gigantes
 def quadratic_sieve(N):
-    B = int(math.exp(0.5 * math.log(N) * math.log(math.log(N))))
+    """Implementa o Crivo Quadrático para fatorar o número N"""
+    if is_perfect_square(N):
+        root = int(math.isqrt(N))
+        return root, root, 1, N
+
+    B = 2000  # Fixar o valor de B em 2000 para garantir primos suficientes
     primes = generate_primes(B)
-
-    # Calcula os valores de f(j) e os armazena
-    def f(j):
-        return (j + int(math.sqrt(N)))**2 - N
-
+    sqrtN = int(math.isqrt(N))
     smooth_numbers = []
-    for j in range(1, B + 1):
-        val = f(j)
-        if all(val % p == 0 for p in primes):
-            smooth_numbers.append((j, val))
+    x_values = []
+    j = 1
 
-    # Encontra x e y
-    x = smooth_numbers[0][1]
-    y = smooth_numbers[1][1]
-    return x, y, math.gcd(x - y, N), math.gcd(x + y, N)
+    while len(smooth_numbers) < len(primes) and j < 10 * B:  # Limitar o valor de j para evitar loop infinito
+        x = sqrtN + j
+        x2 = x * x - N
+        factors = []
+        for prime in primes:
+            while x2 % prime == 0:
+                x2 //= prime
+                factors.append(prime)
+        if x2 == 1:  # É um número smooth
+            smooth_numbers.append(factors)
+            x_values.append(x)
+        j += 1
 
-# Solução de sistemas lineares em Z2
-def solve_mod_2(A, b):
-    A = np.array(A) % 2
-    b = np.array(b) % 2
-    solution = np.linalg.solve(A, b)
-    return solution % 2
+    if len(smooth_numbers) < 2:
+        print(f"Não foram encontradas relações suaves suficientes para N = {N}.")
+        return None, None, None, None
+
+    # Construção da matriz A (equivalente à forma escalonada sobre Z2)
+    M = len(primes)
+    A = np.zeros((len(smooth_numbers), M), dtype=int)
+
+    for i, factors in enumerate(smooth_numbers):
+        for factor in factors:
+            A[i, primes.index(factor)] += 1
+        A[i] %= 2  # Forma escalonada sobre Z2
+
+    # Busca do núcleo da matriz A
+    ns = null_space(A)
+
+    if ns.size == 0:
+        print(f"Nenhuma solução encontrada para N = {N}.")
+        return None, None, None, None
+
+    # Extrair fatores a partir do núcleo
+    for solution in ns.T:
+        x_indices = np.where(solution != 0)[0]
+        if len(x_indices) == 0:
+            continue
+        
+        x = np.prod([x_values[i] for i in x_indices]) % N
+
+        # Para y2, devemos aplainar a lista de fatores antes de multiplicar
+        y2_factors = [factor for i in x_indices for factor in smooth_numbers[i]]
+        y2 = np.prod(y2_factors) % N
+        y = int(math.isqrt(y2))
+
+        # Verificar se y^2 é igual a y2 (para evitar erros de raiz quadrada)
+        if y * y != y2:
+            continue
+        
+        factor1 = math.gcd(x - y, N)
+        factor2 = math.gcd(x + y, N)
+        if 1 < factor1 < N:
+            return x, y, factor1, factor2
+
+    return None, None, None, None
 
 def main(N1, N2):
-    for N in [N1, N2]:
+    """Função principal para fatorar dois números fornecidos"""
+    for N in [N2, N1]:
         print(f"\nFatorando N = {N}")
-        x, y, gcd1, gcd2 = quadratic_sieve(N)
-        print(f"x: {x}, y: {y}")
-        print(f"mdc(x-y, N): {gcd1}")
-        print(f"mdc(x+y, N): {gcd2}")
+        x, y, factor1, factor2 = quadratic_sieve(N)
+        if x and y:
+            print(f"x = {x}, y = {y}")
+            print(f"mdc(x - y, N) = {factor1}")
+            print(f"mdc(x + y, N) = {factor2}")
+        else:
+            print(f"Não foi possível fatorar N = {N} com os parâmetros atuais.")
 
 if __name__ == "__main__":
     N1 = int(input("Digite o primeiro número N a ser fatorado: "))
